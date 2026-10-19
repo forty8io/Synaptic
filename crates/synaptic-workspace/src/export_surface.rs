@@ -178,6 +178,9 @@ pub struct CrossRepoReport {
 /// A per-member lookup the resolver matches imports against.
 struct MemberIndex {
     repo: String,
+    /// Canonical NuGet package id for `PackageReference` resolution. This is
+    /// distinct from the synthesized .NET namespace used by C# source imports.
+    dotnet_package_id: Option<String>,
     /// The coordinate name as imports spell it. For Cargo this is the crate name
     /// with `-`→`_` (Rust `use` paths use the underscore lib name, not the
     /// hyphenated package name); other ecosystems use the coordinate verbatim.
@@ -260,6 +263,46 @@ fn resolve_label(
     Some((owners[0].0.clone(), local, Confidence::Extracted, 1.0))
 }
 
+/// A .NET PackageReference target is labeled `PackageId (Version)` when its
+/// project file pins a version; the version is not part of the published package
+/// coordinate.
+fn nuget_package_id(imported: &str) -> &str {
+    imported
+        .rsplit_once(" (")
+        .filter(|(_, version)| version.ends_with(')'))
+        .map(|(package_id, _)| package_id)
+        .unwrap_or(imported)
+        .trim()
+}
+
+fn is_nuget_reference(context: Option<&str>) -> bool {
+    context.is_some_and(|value| value == "package" || value.starts_with("package:"))
+}
+
+/// Match PackageReference by NuGet PackageId, not by a source namespace or by a
+/// similarly named exported symbol. The package id is case-insensitive, as in
+/// NuGet; duplicate producers remain unresolved rather than choosing arbitrarily.
+fn resolve_nuget_reference(
+    imported: &str,
+    members: &[MemberIndex],
+) -> Option<(String, String, Confidence, f32)> {
+    let package_id = nuget_package_id(imported);
+    let mut matching = members.iter().filter(|member| {
+        member
+            .dotnet_package_id
+            .as_deref()
+            .is_some_and(|id| id.eq_ignore_ascii_case(package_id))
+    });
+    let member = matching.next()?;
+    if matching.next().is_some() {
+        return None;
+    }
+    member
+        .anchor
+        .clone()
+        .map(|anchor| (member.repo.clone(), anchor, Confidence::Extracted, 1.0))
+}
+
 /// Resolve cross-repo imports on a composed (already `tag::`-prefixed) graph.
 ///
 /// Each external stub that is an import target is resolved (once) to a member.
@@ -304,6 +347,8 @@ pub fn resolve_cross_repo(
             };
             MemberIndex {
                 repo: s.repo.clone(),
+                dotnet_package_id: (s.coordinate.ecosystem == Ecosystem::DotNet)
+                    .then(|| s.coordinate.name.clone()),
                 match_name,
                 by_name,
                 anchor,
@@ -364,19 +409,23 @@ pub fn resolve_cross_repo(
         // `@acme/Hub` or `@app/Button` -> member `hub`) is the authoritative
         // cross-repo link for these architectures; try it before coordinate / symbol
         // matching. Package-level: INFERRED, targets the member's anchor.
-        let decided = aliases
-            .resolve(imported.as_str())
-            .and_then(|tag| {
-                anchor_by_tag.get(tag).map(|anchor| {
-                    (
-                        tag.to_string(),
-                        anchor.to_string(),
-                        Confidence::Inferred,
-                        0.75f32,
-                    )
+        let decided = if is_nuget_reference(e.context.as_deref()) {
+            resolve_nuget_reference(imported, &members)
+        } else {
+            aliases
+                .resolve(imported.as_str())
+                .and_then(|tag| {
+                    anchor_by_tag.get(tag).map(|anchor| {
+                        (
+                            tag.to_string(),
+                            anchor.to_string(),
+                            Confidence::Inferred,
+                            0.75f32,
+                        )
+                    })
                 })
-            })
-            .or_else(|| resolve_label(imported, &members, &symbol_owners));
+                .or_else(|| resolve_label(imported, &members, &symbol_owners))
+        };
         match decided {
             Some((repo, local, conf, score)) => {
                 let target = NodeId(format!("{repo}::{local}"));

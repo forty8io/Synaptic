@@ -380,7 +380,7 @@ Cargo to npm to Go to Python to Maven to Gradle to .NET:
 | `python` | `pyproject.toml` | `[project].name`, else `[tool.poetry].name` |
 | `jvm` | `pom.xml` | `groupId:artifactId` (artifactId alone if no groupId) |
 | `gradle` | `settings.gradle(.kts)` | `rootProject.name`, else the dir name |
-| `dotnet` | `*.csproj`/`*.fsproj`/`*.vbproj`, else a root `*.sln` | `AssemblyName`, else `RootNamespace`, else the project-file stem. With only a `.sln` at the root, the first project it references supplies the name (falling back to the `.sln` stem) |
+| `dotnet` | `*.csproj`/`*.fsproj`/`*.vbproj`, else a root `*.sln` | `PackageId`, else `AssemblyName`, else `RootNamespace`, else the project-file stem. With only a `.sln` at the root, the first project it references supplies the name (falling back to the `.sln` stem) |
 
 A member with no recognized manifest and no explicit manifest `coordinate` has
 no detected coordinate (and so contributes no coordinate-based export surface
@@ -415,7 +415,9 @@ stub that is the target of an `imports`/`imports_from` edge (or an edge whose
    package import (`use billing::...`, `import billing`) resolves package-level
    to the member's anchor (`INFERRED`, confidence 0.75). Cargo coordinates are
    matched with `-` normalized to `_` (Rust `use` paths use the underscore lib
-   name). JVM/.NET imports match the synthesized namespace.
+   name). JVM/.NET source imports match the synthesized namespace.
+   .NET `PackageReference` imports match the member's `PackageId` coordinate
+   case-insensitively; their explicit version remains on the edge context.
 3. **Single-owner symbol fallback**: when the imported stub names a symbol (e.g.
    Rust `use billing::Ledger` yields a stub labeled `Ledger`) and exactly one
    member exports that symbol, it resolves to that member (`EXTRACTED`). A symbol

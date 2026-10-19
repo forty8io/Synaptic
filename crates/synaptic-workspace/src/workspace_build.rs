@@ -602,6 +602,76 @@ mod tests {
     }
 
     #[test]
+    fn package_reference_resolves_by_dotnet_coordinate_and_keeps_version() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path();
+        touch(
+            root,
+            "synaptic-workspace.toml",
+            r#"[workspace]
+name = "nuget"
+
+[[repos]]
+name = "AuditLogger"
+tag = "auditlogger"
+path = "packages/auditlogger"
+coordinate = { ecosystem = "dotnet", name = "fy8.AuditLogger" }
+
+[[repos]]
+name = "Accounting"
+tag = "accounting"
+path = "services/accounting"
+coordinate = { ecosystem = "dotnet", name = "fy8.Func.Accounting" }
+
+[[repos]]
+name = "Lookalike"
+tag = "lookalike"
+path = "packages/lookalike"
+coordinate = { ecosystem = "dotnet", name = "Other.Package" }
+"#,
+        );
+        touch(
+            root,
+            "packages/auditlogger/fy8.AuditLogger.csproj",
+            r#"<Project><PropertyGroup><AssemblyName>Audit.Assembly</AssemblyName><RootNamespace>vendor.audit</RootNamespace></PropertyGroup></Project>"#,
+        );
+        touch(
+            root,
+            "packages/auditlogger/AuditLogger.cs",
+            "namespace vendor.audit; public class AuditLogger { }\n",
+        );
+        touch(
+            root,
+            "packages/lookalike/Lookalike.csproj",
+            r#"<Project><PropertyGroup><AssemblyName>Lookalike.Assembly</AssemblyName><RootNamespace>fy8.AuditLogger</RootNamespace></PropertyGroup></Project>"#,
+        );
+        touch(
+            root,
+            "packages/lookalike/Lookalike.cs",
+            "namespace fy8.AuditLogger; public class Lookalike { }\n",
+        );
+        touch(
+            root,
+            "services/accounting/Accounting.csproj",
+            r#"<Project><ItemGroup><PackageReference Include="FY8.AuditLogger" Version="36.0.2" /></ItemGroup></Project>"#,
+        );
+
+        let build = build_workspace(root, &WorkspaceBuildOptions::default()).unwrap();
+        let package_edge = build.federated.edges().find(|edge| {
+            edge.cross_repo
+                && edge.relation == "imports"
+                && edge.source.0.starts_with("accounting::")
+                && edge.target.0.starts_with("auditlogger::")
+                && edge.context.as_deref() == Some("package:36.0.2")
+        });
+        assert!(
+            package_edge.is_some(),
+            "expected PackageReference → NuGet producer edge; report={:?}",
+            build.cross_repo
+        );
+    }
+
+    #[test]
     fn artifact_federation_matches_co_located() {
         let d = tempfile::tempdir().unwrap();
         make_monorepo(d.path());

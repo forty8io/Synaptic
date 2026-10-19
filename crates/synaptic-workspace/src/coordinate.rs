@@ -193,11 +193,12 @@ pub(crate) fn sln_project_files(dir: &Path, sln: &Path) -> Vec<PathBuf> {
     out
 }
 
-/// `<AssemblyName>`/`<RootNamespace>` of a .NET project file, else its file stem.
+/// `<PackageId>`/`<AssemblyName>`/`<RootNamespace>` of a .NET project file, else
+/// its file stem. A NuGet package id is the published coordinate when present.
 fn dotnet_proj_name(proj: &Path) -> Option<String> {
     let text = std::fs::read_to_string(proj).ok()?;
     if let Ok(doc) = roxmltree::Document::parse(&text) {
-        for tag in ["AssemblyName", "RootNamespace"] {
+        for tag in ["PackageId", "AssemblyName", "RootNamespace"] {
             if let Some(v) = doc
                 .descendants()
                 .find(|n| n.has_tag_name(tag))
@@ -215,7 +216,8 @@ fn dotnet_proj_name(proj: &Path) -> Option<String> {
 /// .NET project name for a member root. Tries, in order: a project file directly
 /// in `root`; the first project a root `.sln` references (the standard layout —
 /// solution at the repo root, projects in subdirectories); the `.sln` file stem.
-/// Each project name is its `<AssemblyName>`/`<RootNamespace>` or file stem.
+/// Each project name is its `<PackageId>`/`<AssemblyName>`/`<RootNamespace>` or
+/// file stem.
 fn dotnet_name(root: &Path) -> Option<String> {
     if let Some(proj) = first_dotnet_proj(root) {
         return dotnet_proj_name(&proj);
@@ -398,6 +400,19 @@ mod tests {
         let c = package_coordinate(d.path()).unwrap();
         assert_eq!(c.ecosystem, Ecosystem::DotNet);
         assert_eq!(c.name, "Acme.Svc");
+    }
+
+    #[test]
+    fn reads_dotnet_package_id_before_assembly_name() {
+        let d = tempfile::tempdir().unwrap();
+        write(
+            d.path(),
+            "AuditLogger.csproj",
+            r#"<Project><PropertyGroup><AssemblyName>Audit.Assembly</AssemblyName><PackageId>fy8.AuditLogger</PackageId></PropertyGroup></Project>"#,
+        );
+        let c = package_coordinate(d.path()).unwrap();
+        assert_eq!(c.ecosystem, Ecosystem::DotNet);
+        assert_eq!(c.name, "fy8.AuditLogger");
     }
 
     #[test]

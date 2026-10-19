@@ -6,7 +6,8 @@
 //! the legacy line format (parsed with regex). Emitted graph shape:
 //! - project file → `contains` → project (`.sln`/`.slnx`)
 //! - project file → `imports` → `<ProjectReference>` / `<BuildDependency>` (project)
-//! - project file → `imports` → `<PackageReference>` (NuGet, `code`)
+//! - project file → `imports` → `<PackageReference>` (external NuGet stub,
+//!   with `PackageId` and any explicit version retained for workspace resolution)
 //! - project file → `references` → `<TargetFramework(s)>` / SDK (`concept`)
 //!
 //! Project-reference targets use the **root-relative resolved path** as their id
@@ -279,13 +280,18 @@ fn extract_csproj(path: &str, source: &[u8]) -> ExtractionResult {
                     .map(str::trim)
                     .filter(|s| !s.is_empty())
                 {
-                    let label = match attr_ci(node, "Version").map(str::trim) {
-                        Some(v) if !v.is_empty() => format!("{name} ({v})"),
-                        _ => name.to_string(),
-                    };
+                    let version = attr_ci(node, "Version")
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty());
+                    let label = version
+                        .map(|v| format!("{name} ({v})"))
+                        .unwrap_or_else(|| name.to_string());
+                    let context = version
+                        .map(|v| format!("package:{v}"))
+                        .unwrap_or_else(|| "package".to_string());
                     let nid = NodeId(make_id(&["nuget", name]));
-                    b.add_node(nid.clone(), label, line);
-                    b.add_edge(file_nid.clone(), nid, "imports", line, Some("package"));
+                    b.add_external_node(nid.clone(), label);
+                    b.add_edge(file_nid.clone(), nid, "imports", line, Some(&context));
                 }
             }
             "ProjectReference" => {
@@ -527,6 +533,20 @@ mod tests {
         assert_eq!(
             node_type(&r, "Newtonsoft.Json (13.0.1)"),
             Some(FileType::Code)
+        );
+        let package = r
+            .nodes
+            .iter()
+            .find(|n| n.label == "Newtonsoft.Json (13.0.1)")
+            .expect("PackageReference target node");
+        assert!(
+            package.source_file.is_empty(),
+            "package target is an external stub"
+        );
+        assert!(
+            r.edges.iter().any(|e| {
+                e.target == package.id && e.context.as_deref() == Some("package:13.0.1")
+            })
         );
     }
 
